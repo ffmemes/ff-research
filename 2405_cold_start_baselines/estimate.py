@@ -1,7 +1,8 @@
+from typing import List
+
 import numpy as np
 import polars as pl
-
-from models import BaseRecommender
+from models import ColdStartRecommender
 
 
 def estimate_one(recs, target_memes, target_reactions):
@@ -22,7 +23,7 @@ def estimate_one(recs, target_memes, target_reactions):
             continue
 
     if (likes + dislikes) == 0:
-        return None, None, None
+        return 0, 0, 0.0
     
     lr = likes / (likes + dislikes)
 
@@ -46,30 +47,31 @@ def print_results(results_df: pl.DataFrame):
     print(f'Likes - {likes}, Like Rate = {lr:.3f} +- {btstrp_macro_std * 1.96:.3f}, Like Rate Micro = {lr_micro:.3f} +- {btstrp_micro_std * 1.96:.3f}')
 
 
-def estimate(model: BaseRecommender, df: pl.DataFrame, lang_code: str = None, top_size=100):
-    """Estimates the model based on top_size recs"""
+def estimate_cs(model: ColdStartRecommender, df: pl.DataFrame, lang_codes: List[str] = None, top_size=100):
+    """Estimates a cold start model based on top_size recs"""
     rows = []
     for row in df.iter_rows(named=True):
-        recs = model.recommend(row['user_id'], row['date_dtm'], row['hist_memes'], row['hist_reactions'], lang_code=lang_code)[:top_size]
+        recs = model.recommend(top_size, row['date_dtm'], lang_codes=lang_codes)
 
         likes, dislikes, lr = estimate_one(recs, row['target_memes'], row['target_reactions'])
+        if likes + dislikes == 0:
+            continue
 
         rows.append({
             'user_id': row['user_id'],
-            'hist_size': row['hist_size'],
             'date_dtm': row['date_dtm'],
             'likes': likes,
             'dislikes': dislikes,
             'lr': lr,
         })
 
-    results_df = pl.DataFrame(rows)
+    results_df = pl.DataFrame(rows, infer_schema_length=1000)
     print_results(results_df)
 
 
 
-def estimate_prod(recommended_by: str, df: pl.DataFrame):
-    """Estimates production models"""
+def estimate_cs_prod(recommended_by: str, df: pl.DataFrame):
+    """Estimates the production cold start"""
     rows = []
     for row in df.iter_rows(named=True):
         recs = [meme_id for meme_id, _recommended_by in zip(row['target_memes'], row['target_recommended_by']) if _recommended_by == recommended_by]
@@ -78,7 +80,6 @@ def estimate_prod(recommended_by: str, df: pl.DataFrame):
 
         rows.append({
             'user_id': row['user_id'],
-            'hist_size': row['hist_size'],
             'date_dtm': row['date_dtm'],
             'likes': likes,
             'dislikes': dislikes,
